@@ -8,7 +8,9 @@ from src.generation.llm_client import LLMClient
 from src.ingestion.indexer import Indexer
 from src.observability.tracer import Tracer
 from src.retrieval.embedder import Embedder
+from src.retrieval.reranker import Reranker
 from src.retrieval.searcher import Searcher
+from src.retrieval.sparse_embedder import SparseEmbedder
 
 
 def get_settings(request: Request):
@@ -37,3 +39,11 @@ def get_llm(request: Request) -> LLMClient:
 
 def get_tracer(request: Request) -> Tracer:
     return request.app.state.tracer
+
+
+def get_sparse_embedder(request: Request) -> SparseEmbedder:
+    return request.app.state.sparse_embedder
+
+
+def get_reranker(request: Request) -> Reranker:
+    return request.app.state.reranker

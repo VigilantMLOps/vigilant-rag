@@ -3,7 +3,6 @@ name = "vigilant-rag"
 version = "0.1.0"
 description = "Production-grade RAG system over Obsidian notes, integrated with VigilantMLOps"
 authors = ["Bara Al-Sedih <baraalsedih@gmail.com>"]
-readme = "README.md"
 packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
@@ -19,6 +18,8 @@ pydantic-settings = "^2.6"
 pyyaml = "^6.0"
 tiktoken = ">=0.7"
 loguru = "^0.7"
+fastembed = ">=0.5"
+sentence-transformers = ">=3.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
