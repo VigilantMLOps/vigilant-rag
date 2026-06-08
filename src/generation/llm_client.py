@@ -18,6 +18,14 @@ class GenerationResult:
     latency_ms: int
 
 
+@dataclass
+class StreamChunk:
+    content: str = ""
+    done: bool = False
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
 class LLMClient:
     def __init__(self, ollama_url: str, model: str = "llama3.2:3b") -> None:
         self._chat_url = ollama_url.rstrip("/") + "/api/chat"
@@ -54,7 +62,7 @@ class LLMClient:
         )
 
     async def stream(self, system: str, user: str):
-        """Async generator that yields text chunks as they arrive from Ollama."""
+        """Async generator yielding StreamChunk objects. Final chunk has done=True and token counts."""
         async with self._client.stream(
             "POST",
             self._chat_url,
@@ -74,8 +82,13 @@ class LLMClient:
                 try:
                     chunk = json.loads(line)
                     if content := chunk.get("message", {}).get("content", ""):
-                        yield content
+                        yield StreamChunk(content=content)
                     if chunk.get("done"):
+                        yield StreamChunk(
+                            done=True,
+                            prompt_tokens=chunk.get("prompt_eval_count", 0),
+                            completion_tokens=chunk.get("eval_count", 0),
+                        )
                         break
                 except json.JSONDecodeError:
                     logger.warning(f"Unparseable Ollama stream line: {line!r}")

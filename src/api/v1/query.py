@@ -6,6 +6,7 @@ import asyncio
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -17,7 +18,7 @@ from src.api.dependencies import (
     get_sparse_embedder,
     get_tracer,
 )
-from src.generation.llm_client import LLMClient
+from src.generation.llm_client import LLMClient, StreamChunk
 from src.generation.prompt_builder import QueryMode, build_prompt
 from src.observability.tracer import RagTrace, Tracer
 from src.retrieval.embedder import Embedder
@@ -145,3 +146,82 @@ async def query(
         generation_latency_ms=generation_latency_ms,
         total_latency_ms=total_latency_ms,
     )
+
+
+@router.post("/query/stream")
+async def query_stream(
+    request: QueryRequest,
+    embedder: Embedder = Depends(get_embedder),
+    sparse_embedder: SparseEmbedder = Depends(get_sparse_embedder),
+    searcher: Searcher = Depends(get_searcher),
+    reranker: Reranker = Depends(get_reranker),
+    llm: LLMClient = Depends(get_llm),
+    tracer: Tracer = Depends(get_tracer),
+) -> StreamingResponse:
+    """SSE streaming variant. Emits token chunks, then a final 'done' event with sources."""
+    t_total_start = time.monotonic()
+
+    # Embed + retrieve + rerank (identical to non-streaming path)
+    t_ret_start = time.monotonic()
+    try:
+        query_vector, sparse_vector = await asyncio.gather(
+            embedder.embed(request.query),
+            sparse_embedder.embed(request.query),
+        )
+        candidates = await searcher.search(
+            query_vector, sparse_vector,
+            filter_tags=request.filters.tags or None,
+            filter_has_tasks=request.filters.has_tasks,
+        )
+        results = await reranker.rerank(request.query, candidates, top_n=request.top_k)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Retrieval failed: {e}")
+
+    retrieval_latency_ms = int((time.monotonic() - t_ret_start) * 1000)
+    system, user = build_prompt(request.query, request.mode, results)
+
+    sources_payload = [
+        {"title": r.title, "file_path": r.file_path, "excerpt": r.text[:300], "score": round(r.score, 4)}
+        for r in results
+    ]
+    top_score = results[0].score if results else 0.0
+    trace = RagTrace(
+        query_text=request.query,
+        query_mode=request.mode,
+        n_retrieved=len(results),
+        top_retrieval_score=top_score,
+        retrieval_latency_ms=retrieval_latency_ms,
+        generation_latency_ms=0,
+        total_latency_ms=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        model_name=llm._model,
+        sources=[r.file_path for r in results],
+    )
+
+    async def _sse_generator():
+        import json as _json
+        t_gen_start = time.monotonic()
+        async for chunk in llm.stream(system, user):
+            if chunk.done:
+                generation_latency_ms = int((time.monotonic() - t_gen_start) * 1000)
+                total_latency_ms = int((time.monotonic() - t_total_start) * 1000)
+                done_payload = {
+                    "type": "done",
+                    "sources": sources_payload,
+                    "trace_id": trace.trace_id,
+                    "retrieval_latency_ms": retrieval_latency_ms,
+                    "generation_latency_ms": generation_latency_ms,
+                    "total_latency_ms": total_latency_ms,
+                }
+                yield f"data: {_json.dumps(done_payload)}\n\n"
+                # Update trace with real token counts and fire
+                trace.prompt_tokens = chunk.prompt_tokens
+                trace.completion_tokens = chunk.completion_tokens
+                trace.generation_latency_ms = generation_latency_ms
+                trace.total_latency_ms = total_latency_ms
+                asyncio.create_task(tracer.emit(trace))
+            else:
+                yield f"data: {_json.dumps({'type': 'token', 'content': chunk.content})}\n\n"
+
+    return StreamingResponse(_sse_generator(), media_type="text/event-stream")

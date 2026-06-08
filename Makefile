@@ -4,7 +4,7 @@ QUERY         ?= "What are my open tasks?"
 MODE          ?= factual
 
 .PHONY: help install run test test-all lint format type-check \
-        up down pull-models ingest health query clean build
+        up down pull-models ingest health query stream clean build
 
 help:
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,6 +63,16 @@ query: ## Send a query (override: make query QUERY="..." MODE=synthesis)
 	@curl -s -X POST $(API_URL)/api/v1/query \
 		-H "Content-Type: application/json" \
 		-d '{"query": $(QUERY), "mode": "$(MODE)"}' | python3 -m json.tool
+
+stream: ## Stream a query response (tokens printed as they arrive)
+	@curl -s -N -X POST $(API_URL)/api/v1/query/stream \
+		-H "Content-Type: application/json" \
+		-d '{"query": $(QUERY), "mode": "$(MODE)"}' \
+		| python3 -c "\
+import sys, json; \
+[print(p.get('content',''), end='', flush=True) if (p := json.loads(l[5:]))['type'] == 'token' \
+else (print(), print(f\"--- {p['total_latency_ms']}ms total | {p['retrieval_latency_ms']}ms retrieval | {p['generation_latency_ms']}ms generation ---\")) \
+for l in sys.stdin if l.startswith('data:')]"
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 
