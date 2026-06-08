@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "vigilant-rag"
+version = "0.1.0"
+description = "Production-grade RAG system over Obsidian notes, integrated with VigilantMLOps"
+authors = ["Bara Al-Sedih <baraalsedih@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115"
+uvicorn = { extras = ["standard"], version = "^0.32" }
+qdrant-client = "^1.12"
+httpx = "^0.28"
+watchdog = "^4.0"
+python-frontmatter = "^1.1"
+mistune = "^3.0"
+pydantic-settings = "^2.6"
+pyyaml = "^6.0"
+tiktoken = ">=0.7"
+loguru = "^0.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.24"
+pytest-httpx = "^0.35"
+ruff = "^0.8"
+mypy = "^1.13"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

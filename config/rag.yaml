@@ -1,0 +1,17 @@
+ingestion:
+  chunk_size: 512        # tokens per chunk
+  chunk_overlap: 64      # token overlap between chunks
+  debounce_seconds: 2.0  # wait after last file event before indexing
+
+retrieval:
+  top_k_dense: 20        # candidates from Qdrant ANN
+  top_k_final: 5         # results after reranking (Phase 2)
+  score_threshold: 0.3   # minimum cosine score to include a result
+
+generation:
+  prompt_version: v1
+  max_context_tokens: 3000  # truncate context to fit LLM context window
+
+observability:
+  emit_traces: true
+  emit_timeout_seconds: 2.0
