@@ -6,15 +6,24 @@ import asyncio
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import get_embedder, get_indexer, get_llm, get_searcher, get_tracer
+from src.api.dependencies import (
+    get_embedder,
+    get_llm,
+    get_reranker,
+    get_searcher,
+    get_sparse_embedder,
+    get_tracer,
+)
 from src.generation.llm_client import LLMClient
 from src.generation.prompt_builder import QueryMode, build_prompt
-from src.ingestion.indexer import Indexer
 from src.observability.tracer import RagTrace, Tracer
 from src.retrieval.embedder import Embedder
+from src.retrieval.reranker import Reranker
 from src.retrieval.searcher import SearchResult, Searcher
+from src.retrieval.sparse_embedder import SparseEmbedder
 
 router = APIRouter()
 
@@ -51,33 +60,45 @@ class QueryResponse(BaseModel):
 async def query(
     request: QueryRequest,
     embedder: Embedder = Depends(get_embedder),
+    sparse_embedder: SparseEmbedder = Depends(get_sparse_embedder),
     searcher: Searcher = Depends(get_searcher),
+    reranker: Reranker = Depends(get_reranker),
     llm: LLMClient = Depends(get_llm),
     tracer: Tracer = Depends(get_tracer),
 ) -> QueryResponse:
     t_total_start = time.monotonic()
 
-    # 1. Embed query
+    # 1. Embed query — dense (Ollama) + sparse (BM25) in parallel
     t_ret_start = time.monotonic()
     try:
-        query_vector = await embedder.embed(request.query)
+        query_vector, sparse_vector = await asyncio.gather(
+            embedder.embed(request.query),
+            sparse_embedder.embed(request.query),
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Embedding service unavailable: {e}")
 
-    # 2. Retrieve
+    # 2. Hybrid retrieval: RRF fusion of dense + sparse (fetch top_k_dense candidates)
     try:
-        results: list[SearchResult] = await searcher.search(
+        candidates: list[SearchResult] = await searcher.search(
             query_vector,
-            top_k=request.top_k,
+            sparse_vector,
             filter_tags=request.filters.tags or None,
             filter_has_tasks=request.filters.has_tasks,
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Vector search unavailable: {e}")
 
+    # 3. Cross-encoder rerank candidates → top_k final results
+    try:
+        results = await reranker.rerank(request.query, candidates, top_n=request.top_k)
+    except Exception as e:
+        logger.warning(f"Reranking failed, falling back to raw retrieval: {e}")
+        results = candidates[: request.top_k]
+
     retrieval_latency_ms = int((time.monotonic() - t_ret_start) * 1000)
 
-    # 3. Build prompt and generate
+    # 4. Build prompt and generate
     system, user = build_prompt(request.query, request.mode, results)
     t_gen_start = time.monotonic()
     try:
@@ -88,7 +109,7 @@ async def query(
     generation_latency_ms = int((time.monotonic() - t_gen_start) * 1000)
     total_latency_ms = int((time.monotonic() - t_total_start) * 1000)
 
-    # 4. Build response
+    # 5. Build response
     sources = [
         SourceDoc(
             title=r.title,

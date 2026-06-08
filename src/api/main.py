@@ -16,7 +16,9 @@ from src.ingestion.indexer import Indexer
 from src.ingestion.watcher import VaultWatcher
 from src.observability.tracer import Tracer
 from src.retrieval.embedder import Embedder
+from src.retrieval.reranker import Reranker
 from src.retrieval.searcher import Searcher
+from src.retrieval.sparse_embedder import SparseEmbedder
 
 
 @asynccontextmanager
@@ -29,16 +31,19 @@ async def lifespan(app: FastAPI):
 
     # 2. Build service graph
     embedder = Embedder(settings.ollama_url, settings.embed_model)
+    sparse_embedder = SparseEmbedder()
     searcher = Searcher(
         qdrant=qdrant,
         collection=settings.collection_name,
         top_k=rag_cfg["retrieval"]["top_k_dense"],
         score_threshold=rag_cfg["retrieval"]["score_threshold"],
     )
+    reranker = Reranker(top_n=rag_cfg["retrieval"]["top_k_final"])
     indexer = Indexer(
         qdrant=qdrant,
         collection=settings.collection_name,
         embedder=embedder,
+        sparse_embedder=sparse_embedder,
         chunk_size=rag_cfg["ingestion"]["chunk_size"],
         chunk_overlap=rag_cfg["ingestion"]["chunk_overlap"],
     )
@@ -59,7 +64,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.qdrant = qdrant
     app.state.embedder = embedder
+    app.state.sparse_embedder = sparse_embedder
     app.state.searcher = searcher
+    app.state.reranker = reranker
     app.state.indexer = indexer
     app.state.llm = llm
     app.state.tracer = tracer

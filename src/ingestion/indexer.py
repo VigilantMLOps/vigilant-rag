@@ -13,6 +13,9 @@ from qdrant_client.models import (
     Filter,
     MatchValue,
     PointStruct,
+    SparseIndexParams,
+    SparseVector,
+    SparseVectorParams,
     VectorParams,
 )
 
@@ -27,24 +30,37 @@ class Indexer:
         self,
         qdrant: AsyncQdrantClient,
         collection: str,
-        embedder,  # retrieval.embedder.Embedder — injected to avoid circular import
+        embedder,         # retrieval.embedder.Embedder
+        sparse_embedder,  # retrieval.sparse_embedder.SparseEmbedder
         chunk_size: int = 512,
         chunk_overlap: int = 64,
     ) -> None:
         self._qdrant = qdrant
         self._collection = collection
         self._embedder = embedder
+        self._sparse_embedder = sparse_embedder
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
 
     async def ensure_collection(self) -> None:
-        exists = await self._qdrant.collection_exists(self._collection)
-        if not exists:
-            await self._qdrant.create_collection(
-                collection_name=self._collection,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-            )
-            logger.info(f"Created Qdrant collection: {self._collection}")
+        """Create collection with named dense+sparse vectors. Migrates old schema if found."""
+        try:
+            info = await self._qdrant.get_collection(self._collection)
+            # Named-vector schema: vectors_config is a dict with "dense" key
+            if isinstance(info.config.params.vectors, dict) and "dense" in info.config.params.vectors:
+                return
+            # Old unnamed-vector schema — drop and recreate
+            logger.warning(f"Collection '{self._collection}' has old schema; recreating with hybrid vectors")
+            await self._qdrant.delete_collection(self._collection)
+        except Exception:
+            pass  # Collection does not exist yet
+
+        await self._qdrant.create_collection(
+            collection_name=self._collection,
+            vectors_config={"dense": VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)},
+            sparse_vectors_config={"sparse": SparseVectorParams(index=SparseIndexParams(on_disk=False))},
+        )
+        logger.info(f"Created collection '{self._collection}' with dense+sparse hybrid vectors")
 
     async def index_file(self, path: Path) -> int:
         """Parse, chunk, embed, and upsert a single .md file. Returns chunk count."""
@@ -62,8 +78,10 @@ class Indexer:
         # Delete stale chunks for this file before upserting new ones
         await self.delete_file(path)
 
-        vectors = await self._embedder.embed_batch([c.text for c in chunks])
-        points = [_make_point(chunk, vec) for chunk, vec in zip(chunks, vectors)]
+        texts = [c.text for c in chunks]
+        dense_vectors = await self._embedder.embed_batch(texts)
+        sparse_vectors = await self._sparse_embedder.embed_batch(texts)
+        points = [_make_point(c, dv, sv) for c, dv, sv in zip(chunks, dense_vectors, sparse_vectors)]
         await self._qdrant.upsert(collection_name=self._collection, points=points)
         logger.info(f"Indexed {len(points)} chunks for {path.name}")
         return len(points)
@@ -108,12 +126,11 @@ class Indexer:
         return len(results) > 0
 
 
-def _make_point(chunk: Chunk, vector: list[float]) -> PointStruct:
-    # Deterministic UUID from the chunk_id (MD5 hex string)
+def _make_point(chunk: Chunk, dense: list[float], sparse: SparseVector) -> PointStruct:
     point_id = str(uuid.UUID(chunk.chunk_id))
     return PointStruct(
         id=point_id,
-        vector=vector,
+        vector={"dense": dense, "sparse": sparse},
         payload={
             "file_path": chunk.file_path,
             "title": chunk.title,
