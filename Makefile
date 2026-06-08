@@ -4,7 +4,7 @@ QUERY         ?= "What are my open tasks?"
 MODE          ?= factual
 
 .PHONY: help install run test test-all lint format type-check \
-        up down pull-models ingest health query stream clean build
+        up down pull-models ingest health query stream eval eval-judge clean build
 
 help:
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -73,6 +73,14 @@ import sys, json; \
 [print(p.get('content',''), end='', flush=True) if (p := json.loads(l[5:]))['type'] == 'token' \
 else (print(), print(f\"--- {p['total_latency_ms']}ms total | {p['retrieval_latency_ms']}ms retrieval | {p['generation_latency_ms']}ms generation ---\")) \
 for l in sys.stdin if l.startswith('data:')]"
+
+# ── Evaluation ───────────────────────────────────────────────────────────────
+
+eval: ## Run offline eval (Precision@k, Recall@k, MRR, keyword coverage, hallucination)
+	poetry run python -m src.evaluation.evaluator
+
+eval-judge: ## Run eval + LLM-as-judge scoring (slower, ~30s per query)
+	poetry run python -m src.evaluation.evaluator --judge --output data/eval/results.json
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 

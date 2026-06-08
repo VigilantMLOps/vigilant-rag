@@ -8,4 +8,5 @@ dist/
 .mypy_cache/
 .pytest_cache/
 data/eval/*.jsonl
+data/eval/*.json
 !data/eval/.gitkeep
