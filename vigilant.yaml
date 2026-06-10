@@ -1,0 +1,36 @@
+vigilantpack: "1"
+
+app:
+  name: vigilant-rag
+  version: "1.2.0"
+
+env:
+  require:
+    - VAULT_PATH
+  file: .env
+
+compose: docker-compose.yml
+
+services:
+  qdrant:
+    health: http://localhost:6333/health
+    timeout: 30
+  ollama:
+    health: http://localhost:11434/api/version
+    timeout: 60
+
+models:
+  - name: nomic-embed-text
+    required: true
+    warmup: true
+  - name: llama3.2:3b
+    required: true
+    warmup: false
+
+runtime:
+  service: vigilant-rag
+  health: http://localhost:8080/health
+  timeout: 45
+
+startup:
+  timeout: 300
