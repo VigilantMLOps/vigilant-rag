@@ -10,3 +10,7 @@ dist/
 data/eval/*.jsonl
 data/eval/*.json
 !data/eval/.gitkeep
+
+# Generated icon
+AppIcon.icns
+AppIcon.iconset/
